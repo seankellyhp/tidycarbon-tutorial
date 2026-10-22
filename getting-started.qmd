@@ -1,26 +1,14 @@
 ---
 title: "Getting Started with tidycarbon"
 subtitle: "Measuring the energy and emissions of R programs"
-author:
-  - name:
-      given: Sean
-      family: Hamilton-Palicki
-    email: sean.palicki@pm.me
-  - name:
-      given: Isaac
-      family: Bravo
-    email: isaac.bravo@tum.de
 bibliography: references.bib
 csl: apa.csl
-image: figures/electricity-map.png
-image-alt: Map of Europe coloured by the carbon intensity of electricity, from green (low) to brown (high).
 format:
   html:
     toc: true
     toc-location: left
     df-print: tibble
     embed-resources: true
-  ipynb: default
 execute:
   message: false
 knitr:
@@ -31,8 +19,6 @@ knitr:
 
 ```{r}
 #| include: false
-set.seed(721831)
-
 # Quieten CodeCarbon before the first tracker is created, or knitting can
 # hang at the first tracked chunk.
 Sys.setenv(CODECARBON_LOG_LEVEL = "error")
@@ -43,8 +29,10 @@ Sys.setenv(CODECARBON_LOG_LEVEL = "error")
 use_ollama <- TRUE
 use_remote <- FALSE
 
-# The OpenRouter key may sit in a .env beside this file.
-if (file.exists(".env")) readRenviron(".env")
+# The OpenRouter key may sit in a .env beside this file or one folder up.
+for (env_file in c(".env", "../.env")) {
+  if (file.exists(env_file)) readRenviron(env_file)
+}
 
 has_ellmer <- requireNamespace("ellmer", quietly = TRUE)
 
@@ -61,119 +49,39 @@ run_remote <- use_remote && has_ellmer && nzchar(Sys.getenv("OPENROUTER_API_KEY"
 run_llm    <- run_ollama || run_remote
 ```
 
-## Learning Objectives
+## Description
 
-By the end of this tutorial, you will be able to
+TidyCarbon is an open source R package for measuring and comparing the
+resource use of R programs. This is relevant because of the increased reliance of social science research on computationally complex machine learning and AI methods such as large language models [@balluff:2026:nlb], which may consume significantly more non-renewable resources than computationally less advanced methods [@hamiltonpalicki:2026:dlu, luccioni:2024:phc]
 
-1. measure the time, energy and estimated carbon emissions of an existing R
-   script by placing a tracker before and after it,
-2. measure each step of a tidy pipeline separately, to find out where the
-   energy goes,
-3. compare the energy cost of sentiment analysis methods of increasing
-   complexity: a dictionary, a local language model, and a hosted language
-   model reached through an API.
+TidyCarbon provides a tidy interface over the Python
+libraries [CodeCarbon](https://codecarbon.io) [@courty:2026:codecarbon], for measuring the energy of
+local programs, and [EcoLogits](https://ecologits.ai) [@rince:2025:ecologits], for estimating the
+energy use of API calls to LLM providers. Based on measuring time, energy, location, and in, the case of API calls, the length of LLM responses, TidyCarbon provides estimates for equivalent carbon emissions, and water use needed to run the program. TidyCarbon does not implement its
+own algorithms. Instead, it operates as a thin "shim" for integrating energy
+and emissions estimates into R analysis workflows.
 
-## Target audience
+## Use Cases
 
-This tutorial is aimed at social scientists who analyse data in R and want to
-report or reduce the environmental footprint of their analyses. Prior
-knowledge of R and of tidyverse pipelines (`|>`, `dplyr` verbs) is required.
-Familiarity with text analysis helps but is not needed. No knowledge of
-Python is required: tidycarbon installs its Python dependencies itself.
-
-The language model section is optional. It needs either
-[Ollama](https://ollama.com) running on your machine (free), or an
-[OpenRouter](https://openrouter.ai) API key (paid). Without either, that
-section is shown without output, and the rest of the tutorial still runs.
-
-## Setting up the computational environment
-
-tidycarbon is installed from GitHub. It uses
-[reticulate](https://rstudio.github.io/reticulate/) [@ushey:2025:reticulate]
-to create a Python environment with CodeCarbon and EcoLogits the first time it
-is used, which may take a few minutes. Install tidycarbon and the packages
-used in this tutorial:
-
-```{r}
-#| label: install-packages
-#| eval: false
-install.packages("remotes")
-remotes::install_github("seankellyhp/Tidycarbon")
-
-install.packages(c(
-  "dplyr", "tidyr", "stringr", "purrr", "ggplot2",
-  "tidytext", "janeaustenr", "topicmodels", "ellmer"
-))
-```
-
-And load the R packages:
-
-```{r}
-library(tidycarbon)
-
-# tidyverse packages
-library(dplyr)
-library(tidyr)
-library(stringr)
-library(ggplot2)
-library(tidytext)
-library(janeaustenr)
-library(purrr)
-
-# more advanced analyses downstream
-library(topicmodels)
-```
-
-## Duration
-
-Around 45 minutes, plus a few minutes for the first setup of the Python
-environment.
-
-## Social Science Usecase(s)
-
-Computational social science has moved from dictionaries to supervised
-machine learning, encoder models and generative large language models (LLMs).
-Each step raises the energy needed to answer the same research question
-[@luccioni:2024:phc], yet larger models are not reliably more accurate. In
-text classification, specialised models often match or exceed generative
-LLMs at a fraction of the energy cost [@hamiltonpalicki:2026:dlu;
-@balluff:2026:nlb]. Energy use is rarely reported, so researchers cannot
-weigh it against accuracy [@henderson:2020:tsr].
-
-tidycarbon has been used to compare the performance and energy use of text
-classification with open LLMs [@hamiltonpalicki:2026:dlu]. This tutorial
-applies the same comparison to a small example: labelling the sentiment of
-sentences from a novel with a dictionary and with a language model.
-
-## What tidycarbon does
-
-tidycarbon is an open source R package for measuring and comparing the
-resource use of R programs. It provides a tidy interface over the Python
-packages [CodeCarbon](https://codecarbon.io) [@courty:2026:codecarbon], for
-measuring the energy of local programs, and [EcoLogits](https://ecologits.ai)
-[@rince:2025:ecologits], for estimating the energy use of API calls to LLM
-providers. tidycarbon does not implement its own algorithms. Instead, it
-operates as a thin "shim" for integrating energy and emissions estimates into
-R analysis workflows.
-
-With tidycarbon you can
-
-- track and report time, energy, carbon emissions, and water usage for
-  computational analysis tasks,
-- track at macro and micro levels of a program: track a complete analysis, or
-  insert tidycarbon into a tidy pipeline to measure it step by step,
-- compare speed and energy use for alternative methods of analysis (e.g.
+- Track and report time, energy, carbon emissions, and water usage for
+  computational analysis tasks.
+- Track at macro and micro levels of a program: track a complete analysis, or
+  insert TidyCarbon into a tidy pipeline to measure it step by step.
+- Compare speed and energy use for alternative methods of analysis (e.g.
   different methods of sentiment analysis), providing data for reducing the
-  computational effort and emissions of analyses,
-- estimate the energy use and emissions of LLM-based analyses on remote
+  computational effort and emissions of analyses.
+- Estimate the energy use and emissions of LLM-based analyses on remote
   servers (OpenAI, Anthropic, Mistral) in real time or from chat transcripts.
 
-### Important functions
+## Important Functions
 
-To compare full R programs, the `tracker_*` functions wrap existing R code you
-have already written. For more fine-grained analyses and comparisons, the
-`carbon_*` functions operate at the level of pipelines and individual R
-functions.
+TidyCarbon provides functions to track time and energy, and to estimate
+emissions, in a limited number of situations. To compare full R programs, the
+`tracker_*` functions wrap existing R code you have already written. For more
+fine-grained analyses and comparisons, the `carbon_*` functions operate at the
+level of pipelines and individual R functions.
+
+### Function List
 
 | Function | Purpose |
 |---|---|
@@ -186,17 +94,51 @@ functions.
 | `carbon_bench()` | Directly compare the emissions of functions. |
 | `carbon_collect()` | View the results of the `carbon_step()` calls in a pipeline. |
 
-### Output data
+## Output Data
 
 Every measurement is returned as a tibble with one row per tracked task and
-columns for the measurements and machine information. Because the results are
-tidy data [@wickham:2014:td], they can be filtered, joined and plotted like
-any other tibble.
+columns for the measurements and machine information. The most important
+columns, with values from the first example below:
+
+| Column | Unit | Example | Description |
+|---|---|---|---|
+| `label` | | `clean and count words` | Label given to the tracked task. |
+| `wall_time_sec` | seconds | 0.90 | Elapsed time of the task. |
+| `cpu_energy` | kWh | 0.0000094 | Energy used by the CPU. |
+| `gpu_energy` | kWh | 0.0000046 | Energy used by the GPU. |
+| `ram_energy` | kWh | 0.0000035 | Energy used by the RAM. |
+| `energy_consumed` | kWh | 0.0000175 | Total energy: CPU, GPU and RAM. |
+| `emissions_total` | kgCO2eq | 0.0000067 | Estimated emissions: energy times the carbon intensity of the grid. |
+| `country_iso_code` | | `DEU` | Country used for the carbon intensity. |
+| `cpu_model` | | `13th Gen Intel(R) Core(TM) i7-13700K` | CPU of the machine. |
+| `gpu_model` | | `1 x NVIDIA GeForce RTX 3090 Ti` | GPU of the machine. |
 
 As a side effect, results are automatically appended to a CSV file in a local
-project folder. The examples below show both.
+project folder. The examples under [How to Use](#how-to-use) show both.
 
-## Initialize local tracking
+
+
+# Requirements and Installation
+
+TidyCarbon requires reticulate, which creates a Python environment that loads
+the CodeCarbon and EcoLogits dependencies.
+
+```{r}
+#| eval: false
+remotes::install_github("seankellyhp/tidycarbon")
+library("tidycarbon")
+```
+
+TidyCarbon relies on tidyverse packages.
+
+```{r}
+#| eval: false
+install.packages("tidyverse")
+```
+
+## How to Use
+
+### Initialize local tracking
 
 The following examples demonstrate tracking the resources needed for
 computation on a local system. Importantly, measurements are made at the level
@@ -238,7 +180,7 @@ sustainability of local power grids and varies greatly, as Figure 1 shows.
 Countries such as France have a low carbon intensity because they generate a
 higher proportion of their electricity from low-carbon sources (nuclear,
 solar). In contrast, Germany and the US generate a higher proportion from
-fossil fuels (coal, gas).
+fossil fuels (coal, gas). 
 
 ```{r}
 #| label: electricity-map
@@ -246,15 +188,33 @@ fossil fuels (coal, gas).
 #| out-width: "80%"
 #| fig-align: center
 #| fig-cap: "Figure 1. Carbon intensity of electricity across Europe. Green is low, yellow to brown is higher, and grey has no data. Source: Electricity Maps."
-#| fig-alt: "Map of Europe coloured by the carbon intensity of electricity, from green (low) to brown (high), with grey for countries without data."
 knitr::include_graphics("figures/electricity-map.png")
 ```
 
-## Basic measurements of an R program
+### Basic measurements of an R program
 
 We will demonstrate a standard text analysis, using examples from the
-[Tidy Text Mining](https://www.tidytextmining.com) book [@silge:2017:tmr],
-with the tidytext package [@silge:2016:tidytext].
+[Tidy Text Mining](https://www.tidytextmining.com) book [@silge:2017:tmr].
+
+#### Load packages and data
+
+We load the Austen books dataset and several tidyverse packages.
+
+```{r}
+library(tidycarbon)
+
+# tidyverse packages
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(tidytext)
+library(janeaustenr)
+library(purrr)
+
+# more advanced analyses downstream
+library(topicmodels)
+```
 
 ```{r}
 #| results: hide
@@ -270,7 +230,7 @@ For the first example, we start the tracker before a pipeline that counts the
 top words in Austen's novels, and stop it afterwards. It is as simple as
 placing the tracker before and after existing R code.
 
-### Tracker start and stop
+#### Tracker start and stop
 
 ```{r}
 tracker_start() # Start tracker
@@ -333,13 +293,11 @@ Efficiency becomes more relevant with big data, machine learning and AI.
 Computational costs are related to the time and memory needed to complete a
 task. Tasks that are more computationally complex consume more resources.
 
-## Tracking the efficiency of specific tasks
+### Tracking the efficiency of specific tasks
 
 Now we will take the same data and do a more complex analysis. Counting and
 joining are cheap. Fitting a model is not. This stage treats each chapter as a
-document and asks latent Dirichlet allocation [@blei:2003:lda], as
-implemented in topicmodels [@grun:2011:topicmodels], for six topics, one per
-novel.
+document and asks latent Dirichlet allocation for six topics, one per novel.
 We are interested in the computational needs of fitting a topic model, not
 the topics themselves.
 
@@ -404,7 +362,7 @@ the optimal number of topics (k), these numbers increase. Yet they are hardly
 noticeable compared to ever more complex fine-tuning of transformer models or
 inference with large language models.
 
-## Sentiment analysis at increasing levels of complexity
+### Sentiment analysis at increasing levels of complexity
 
 Next we will use several approaches for sentiment analysis, with a focus on
 comparing their emissions. We will start with the least complex approach,
@@ -412,7 +370,7 @@ dictionaries, then move to inference with a pretrained BERT model, then
 inference with a small local language model, and finally estimate inference
 for a large language model called via an API.
 
-### Setup: the language model
+#### Setup: the language model
 
 The language model can run in one of two places, and the tutorial shows both:
 
@@ -443,11 +401,10 @@ The language model can run in one of two places, and the tutorial shows both:
 
   A key already set in `~/.Renviron` works without the `readRenviron()` call.
 
-Both are reached through [ellmer](https://ellmer.tidyverse.org)
-[@wickham:2025:ellmer], so the code
+Both are reached through [ellmer](https://ellmer.tidyverse.org) [@wickham:2025:ellmer], so the code
 that labels the sentences is the same for both.
 
-### The sentences
+#### The sentences
 
 Sentiment is scored sentence by sentence, for the first 200 sentences of
 *Pride and Prejudice*. That keeps the language model stage short; change
@@ -474,10 +431,10 @@ pride <- books |>
 pride
 ```
 
-### Dictionary sentiment
+#### Dictionary sentiment
 
 The least complex approach is a dictionary: split each sentence into words,
-join the bing lexicon [@hu:2004:msc], and count positive against negative words. A sentence
+join the bing lexicon, and count positive against negative words. A sentence
 with no lexicon word, or as many positive as negative ones, is neutral.
 
 `carbon_track()` calls a function with its arguments and returns one row: the
@@ -523,7 +480,7 @@ dictionary_labels |>
   count(sentiment)
 ```
 
-### Batches of sentences
+#### Batches of sentences
 
 The language model labels the same sentences as the dictionary, in order. A
 request has a limit on its length, so the sentences go in batches of 50, one
@@ -534,7 +491,7 @@ of input in all. On the remote pathway, check the price of the model on
 OpenRouter before you run it: unlike the dictionary, every sentence there
 costs money.
 
-### Language model sentiment
+#### Language model sentiment
 
 Describe the answer you want as a type, and write the classifier as a
 function of a batch and a chat. Numbering the sentences lets a whole batch go
@@ -607,7 +564,7 @@ label_sentences <- function(sentences, chat, ..., tries = 3, size = 50) {
 Then pick a pathway. The two blocks below do the same work in different
 places.
 
-### Pathway 1: local Ollama
+#### Pathway 1: local Ollama
 
 ```{r}
 #| echo: false
@@ -690,7 +647,7 @@ local_total |>
   )
 ```
 
-### Pathway 2: remote API
+#### Pathway 2: remote API
 
 ```{r}
 #| echo: false
@@ -787,7 +744,7 @@ remote_total |>
 Remote measurements are logged to their own file, `emissions_remote.csv`,
 because their columns differ from a local measurement.
 
-### Dictionary or model?
+#### Dictionary or model?
 
 Every method labelled the same sentences, and every one was tracked. Put
 what each one cost side by side, in total and per sentence:
@@ -829,37 +786,22 @@ too short to measure well. The local model is measured on the same machine,
 so those two compare directly. The remote figure is an estimate of the
 provider's data center, with a wider scope, and should not be added to the
 local ones. The direction is the useful part: if a dictionary answers the
-question, it does so for a small fraction of the emissions; if it does not,
+question, it does so for a small fraction of the emissions [@balluff:2026:nlb]; if it does not,
 the number of sentences sent to a model is what sets the bill.
 
+## Technical Details
 
-## Conclusion
-
-Now you know how to measure the energy and emissions of an R script with
-`tracker_start()` and `tracker_stop()`, how to find the expensive steps of a
-pipeline with `carbon_step()` and `carbon_collect()`, and how to compare the
-cost of analysis methods with `carbon_track()`, including models that run on
-a provider's servers with `carbon_init_remote()`.
-
-Reporting these numbers alongside accuracy lets readers weigh the two. For
-the technical implementation, visit the
-[tidycarbon GitHub repository](https://github.com/seankellyhp/Tidycarbon).
-
-## Disclaimer
-
-This tutorial is intended for academic research. Energy is measured at the
-level of the whole machine, and emissions are estimates that depend on the
-carbon intensity of the electricity grid. The remote pathway sends text to a
-third-party provider: ensure legality and ethics when processing your own
-data, and follow the provider's terms of service.
-
-## Contact Details
-
-In case of questions, contact [Sean Hamilton-Palicki](mailto:sean.palicki@pm.me).
-For contributions and bug reports, open an issue at
-<https://github.com/seankellyhp/Tidycarbon/issues>.
+Visit the [GitHub repository](https://github.com/seankellyhp/tidycarbon) for
+the technical implementation.
 
 ## References
 
 ::: {#refs}
 :::
+
+## Disclaimer
+
+This method is intended for academic research; ensure legality and ethics
+when processing chat data.
+
+## Contact Details
