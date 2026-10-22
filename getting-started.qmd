@@ -22,37 +22,12 @@ knitr:
 # Quieten CodeCarbon before the first tracker is created, or knitting can
 # hang at the first tracked chunk.
 Sys.setenv(CODECARBON_LOG_LEVEL = "error")
-
-# The language model stage has two pathways: a local model through Ollama, and
-# a hosted model through OpenRouter. Switch each on or off for knitting. A
-# pathway also runs only when what it needs is available.
-use_ollama <- TRUE
-use_remote <- FALSE
-
-# The OpenRouter key may sit in a .env beside this file or one folder up.
-for (env_file in c(".env", "../.env")) {
-  if (file.exists(env_file)) readRenviron(env_file)
-}
-
-has_ellmer <- requireNamespace("ellmer", quietly = TRUE)
-
-ollama_running <- tryCatch(
-  {
-    readLines("http://localhost:11434/api/tags", warn = FALSE)
-    TRUE
-  },
-  error = function(e) FALSE
-)
-
-run_ollama <- use_ollama && has_ellmer && ollama_running
-run_remote <- use_remote && has_ellmer && nzchar(Sys.getenv("OPENROUTER_API_KEY"))
-run_llm    <- run_ollama || run_remote
 ```
 
 ## Description
 
 TidyCarbon is an open source R package for measuring and comparing the
-resource use of R programs. This is relevant because of the increased reliance of social science research on computationally complex machine learning and AI methods such as large language models [@balluff:2026:nlb], which may consume significantly more non-renewable resources than computationally less advanced methods [@hamiltonpalicki:2026:dlu, luccioni:2024:phc]
+resource use of R programs. This is relevant because of the increased reliance of social science research on computationally complex machine learning and AI methods such as large language models [@balluff:2026:nlb], which may consume significantly more non-renewable resources than computationally less advanced methods [@hamiltonpalicki:2026:dlu; @luccioni:2024:phc].
 
 TidyCarbon provides a tidy interface over the Python
 libraries [CodeCarbon](https://codecarbon.io) [@courty:2026:codecarbon], for measuring the energy of
@@ -214,6 +189,8 @@ library(purrr)
 
 # more advanced analyses downstream
 library(topicmodels)
+library(quanteda)
+library(quanteda.sentiment)
 ```
 
 ```{r}
@@ -364,57 +341,21 @@ inference with large language models.
 
 ### Sentiment analysis at increasing levels of complexity
 
-Next we will use several approaches for sentiment analysis, with a focus on
+Next we will use two approaches for sentiment analysis, with a focus on
 comparing their emissions. We will start with the least complex approach,
-dictionaries, then move to inference with a pretrained BERT model, then
-inference with a small local language model, and finally estimate inference
-for a large language model called via an API.
-
-#### Setup: the language model
-
-The language model can run in one of two places, and the tutorial shows both:
-
-- **Local Ollama.** The model runs on your own machine through
-  [Ollama](https://ollama.com). It costs nothing per request, and because the
-  work happens on this machine, the tracker from `carbon_init()` measures it
-  like any other R code. Install Ollama and pull the model:
-
-  ```
-  ollama pull gemma4:e4b
-  ```
-
-- **Remote API.** The model runs in a provider's data center, reached through
-  [OpenRouter](https://openrouter.ai). It needs an API key. Put the key in a
-  `.env` file, with no spaces around the `=`, and keep that file out of
-  version control:
-
-  ```
-  OPENROUTER_API_KEY=sk-or-...
-  ```
-
-  Then load it into the session:
-
-  ```{r}
-  #| eval: false
-  readRenviron(".env")
-  ```
-
-  A key already set in `~/.Renviron` works without the `readRenviron()` call.
-
-Both are reached through [ellmer](https://ellmer.tidyverse.org) [@wickham:2025:ellmer], so the code
-that labels the sentences is the same for both.
+dictionaries, and then estimate inference for a large language model called
+via an API.
 
 #### The sentences
 
-Sentiment is scored sentence by sentence, for the first 200 sentences of
-*Pride and Prejudice*. That keeps the language model stage short; change
-the number to label more. The data has one row per printed line, and a line is rarely a sentence.
+Sentiment is scored sentence by sentence, for every sentence of
+*Pride and Prejudice*. The data has one row per printed line, and a line is rarely a sentence.
 `unnest_sentences()` splits text into sentences, so first join each chapter's
 lines back into one string. The titles in front of names are written without
 their full stop, or every "Mrs." would end a sentence:
 
 ```{r}
-pride <- books |>
+chapters <- books |>
   filter(
     book == "Pride & Prejudice",
     chapter > 0,
@@ -422,9 +363,10 @@ pride <- books |>
   ) |>
   group_by(chapter) |>
   summarise(text = str_squish(str_c(text, collapse = " "))) |>
-  mutate(text = str_replace_all(text, "\\b(Mr|Mrs|Dr)\\.", "\\1")) |>
+  mutate(text = str_replace_all(text, "\\b(Mr|Mrs|Dr)\\.", "\\1"))
+
+pride <- chapters |>
   unnest_sentences(sentence, text, to_lower = FALSE) |>
-  slice_head(n = 200) |>
   mutate(id = row_number()) |>
   select(id, chapter, sentence)
 
@@ -439,7 +381,7 @@ with no lexicon word, or as many positive as negative ones, is neutral.
 
 `carbon_track()` calls a function with its arguments and returns one row: the
 measurement, with the function's value in the `result` column. Here it scores
-every sentence in the sample:
+every sentence in the novel:
 
 ```{r}
 score_with_dictionary <- function(data) {
@@ -480,227 +422,155 @@ dictionary_labels |>
   count(sentiment)
 ```
 
-#### Batches of sentences
+#### Benchmark: tidytext or quanteda?
 
-The language model labels the same sentences as the dictionary, in order. A
-request has a limit on its length, so the sentences go in batches of 50, one
-request per batch. That is
-`r ceiling(nrow(pride) / 50)` requests, plus any retries, and about
-`r format(round(sum(nchar(pride$sentence)) / 4, -3), big.mark = ",")` tokens
-of input in all. On the remote pathway, check the price of the model on
-OpenRouter before you run it: unlike the dictionary, every sentence there
-costs money.
+The same dictionary approach can be written with
+[quanteda.sentiment](https://github.com/quanteda/quanteda.sentiment), which
+includes the same lexicon as bing (`data_dictionary_HuLiu`). It is installed
+from GitHub:
+
+```{r}
+#| eval: false
+remotes::install_github("quanteda/quanteda.sentiment")
+```
+
+To compare the two packages fairly, both start from the same texts, the
+`chapters` of *Pride and Prejudice*, one row per chapter. Each one then
+splits the chapters into sentences, tokenizes them and scores every sentence,
+and the sign of the score gives the label. Every step is part of what is
+measured:
+
+```{r}
+sentiment_tidytext <- function(texts) {
+  texts |>
+    unnest_sentences(sentence, text, to_lower = FALSE) |>
+    mutate(id = row_number()) |>
+    score_with_dictionary()
+}
+
+score_with_quanteda <- function(sentences) {
+  sentences |>
+    tokens() |>
+    textstat_polarity(dictionary = data_dictionary_HuLiu) |>
+    transmute(id = row_number(), sentiment = case_when(
+      sentiment > 0 ~ "positive",
+      sentiment < 0 ~ "negative",
+      .default = "neutral"
+    ))
+}
+
+sentiment_quanteda <- function(texts) {
+  texts |>
+    corpus(text_field = "text") |>
+    corpus_reshape(to = "sentences") |>
+    score_with_quanteda()
+}
+```
+
+The two packages split sentences slightly differently, so to compare their
+labels, score the same sentences, `pride`, with both. The confusion matrix
+shows where they agree:
+
+```{r}
+quanteda_labels <- pride |>
+  corpus(text_field = "sentence") |>
+  score_with_quanteda()
+
+table(
+  tidytext = dictionary_labels$sentiment,
+  quanteda = quanteda_labels$sentiment
+)
+```
+
+`carbon_bench()` runs each approach repeatedly, in random order, and measures
+every run:
+
+```{r}
+bench <- carbon_bench(
+  tidytext = sentiment_tidytext(chapters),
+  quanteda = sentiment_quanteda(chapters),
+  times = 20
+)
+
+bench |>
+  group_by(expr) |>
+  summarise(
+    duration_sec = median(duration),
+    energy_wh    = median(energy_consumed) * 1000,
+    co2e_mg      = median(emissions_total) * 1e6
+  )
+```
+
+```{r}
+#| label: bench-plot
+#| fig-width: 7
+#| fig-height: 3.5
+autoplot(bench, metric = "energy_consumed")
+```
 
 #### Language model sentiment
 
-Describe the answer you want as a type, and write the classifier as a
-function of a batch and a chat. Numbering the sentences lets a whole batch go
-in a single prompt:
+The language model runs in a provider's data center, reached through
+[OpenRouter](https://openrouter.ai) with
+[ellmer](https://ellmer.tidyverse.org) [@wickham:2025:ellmer]. It needs an API
+key. Put the key in a `.env` file, with no spaces around the `=`, and keep
+that file out of version control:
+
+```
+OPENROUTER_API_KEY=sk-or-...
+```
+
+The work happens in the provider's data center, where the tracker from
+`carbon_init()` cannot see it. `carbon_init_remote()` creates a tracker for
+the provider instead: give it the chat, then pass it as `tracker`. The
+estimate comes from [EcoLogits](https://ecologits.ai), which is installed
+automatically through reticulate.
+
+The code below is not run when the tutorial is rendered, because it needs an
+API key and every request costs money. Check the price of the model on
+OpenRouter before you run it.
 
 ```{r}
-#| eval: !expr run_llm
+#| eval: false
 library(ellmer)
+readRenviron(".env")
 
-system_prompt <- paste(
-  "You classify the sentiment of single sentences from a novel.",
-  "Label every sentence."
+chat <- chat_openrouter(
+  model = "openai/gpt-6-luna",
+  system_prompt = "You classify the sentiment of sentences from a novel.",
+  echo = "none"
 )
 
+remote <- carbon_init_remote(
+  chat,
+  project_name = "Austen_tutorial",
+  output_dir   = file.path(tempdir(), "tidycarbon_results")
+)
+
+# Number the sentences, so all of them go in a single prompt.
 sentiment_type <- type_array(items = type_object(
   id        = type_integer("Number of the sentence"),
   sentiment = type_enum(values = c("positive", "neutral", "negative"))
 ))
 
-classify <- function(batch, chat) {
-  prompt <- paste0(batch$id, ". ", batch$sentence, collapse = "\n")
-  chat$chat_structured(prompt, type = sentiment_type) |>
-    as_tibble()
+classify <- function(sentences, chat) {
+  prompt <- paste0(sentences$id, ". ", sentences$sentence, collapse = "\n")
+  chat$chat_structured(prompt, type = sentiment_type)
 }
 
-# An answer that is not valid JSON gives no labels instead of an error.
-classify <- possibly(classify, tibble(id = integer(), sentiment = character()))
-```
+# A random sample of 200 sentences keeps the request short and cheap.
+set.seed(1234)
+pride_sample <- slice_sample(pride, n = 200)
 
-Each request is one `carbon_track()` call. A chat remembers its
-conversation, so clear it first, outside `carbon_track()`, or every request
-would resend the ones before it:
-
-```{r}
-#| eval: !expr run_llm
-# `...` goes to carbon_track(), e.g. `tracker = remote`.
-label_batch <- function(batch, chat, ...) {
-  chat$set_turns(list())
-  carbon_track(classify, batch, chat, ...)
-}
-```
-
-A model sometimes skips a sentence or answers with invalid JSON. So label
-the sentences in batches, then send the ones without a label again, up to 3
-tries. A sentence still without a label after that is missing data. Every
-request is tracked, so the retries are part of the cost:
-
-```{r}
-#| eval: !expr run_llm
-label_sentences <- function(sentences, chat, ..., tries = 3, size = 50) {
-  log  <- NULL
-  todo <- sentences
-
-  for (try in seq_len(tries)) {
-    if (nrow(todo) == 0) break
-
-    requests <- todo |>
-      split(ceiling(seq_len(nrow(todo)) / size)) |>
-      imap(\(batch, i) label_batch(batch, chat, ..., label = paste0(i, "_", try))) |>
-      list_rbind()
-
-    log  <- bind_rows(log, requests)
-    todo <- anti_join(todo, bind_rows(requests$result), by = "id")
-  }
-
-  log
-}
-```
-
-Then pick a pathway. The two blocks below do the same work in different
-places.
-
-#### Pathway 1: local Ollama
-
-```{r}
-#| echo: false
-#| output: asis
-#| eval: !expr "!run_ollama"
-cat(
-  "> **This pathway was skipped when the tutorial was rendered**, because it",
-  "was switched off, Ollama was not running or ellmer is not installed. The",
-  "code is shown without output.\n"
-)
-```
-
-`chat_ollama()` talks to the Ollama server on this machine. The model runs
-here, so the session tracker from `carbon_init()` measures it: CPU, GPU and
-RAM, exactly as for the dictionary.
-
-```{r}
-#| eval: !expr run_ollama
-chat_local <- chat_ollama(
-  model = "gemma4:e4b",
-  system_prompt = system_prompt,
-  echo = "none"
+llm <- carbon_track(
+  classify, pride_sample, chat,
+  tracker = remote,
+  label   = "LLM sentiment"
 )
 
-llm_local <- label_sentences(pride, chat_local)
+llm_labels <- llm$result[[1]]
 
-local_labels <- bind_rows(llm_local$result)
-
-pride |>
-  inner_join(local_labels, by = "id") |>
-  select(sentence, sentiment)
-```
-
-Sentences still without a label after 3 tries:
-
-```{r}
-#| eval: !expr run_ollama
-sum(!pride$id %in% local_labels$id)
-```
-
-`llm_local` has one row per request, in the same columns as any local
-measurement. The label is `{batch}_{try}`. The GPU does
-most of the work:
-
-```{r}
-#| eval: !expr run_ollama
-llm_local |>
-  transmute(
-    label,
-    wall_time_sec,
-    cpu_wh   = cpu_energy * 1000,
-    gpu_wh   = gpu_energy * 1000,
-    ram_wh   = ram_energy * 1000,
-    total_wh = energy_consumed * 1000,
-    co2e_mg  = emissions_total * 1e6
-  )
-```
-
-Summed, the total for the sample:
-
-```{r}
-#| eval: !expr run_ollama
-local_total <- llm_local |>
-  summarise(
-    requests      = n(),
-    wall_time_sec = sum(wall_time_sec),
-    across(c(cpu_energy, gpu_energy, ram_energy, energy_consumed,
-             emissions_total), sum)
-  )
-
-local_total |>
-  transmute(
-    requests,
-    wall_time_sec,
-    cpu_wh   = cpu_energy * 1000,
-    gpu_wh   = gpu_energy * 1000,
-    ram_wh   = ram_energy * 1000,
-    total_wh = energy_consumed * 1000,
-    co2e_mg  = emissions_total * 1e6
-  )
-```
-
-#### Pathway 2: remote API
-
-```{r}
-#| echo: false
-#| output: asis
-#| eval: !expr "!run_remote"
-cat(
-  "> **This pathway was skipped when the tutorial was rendered**, because it",
-  "was switched off, no `OPENROUTER_API_KEY` was set or ellmer is not",
-  "installed. The code is shown without output.\n"
-)
-```
-
-`chat_openrouter()` sends the same batches to a hosted model. The work now
-happens in the provider's data center, where the tracker from `carbon_init()`
-cannot see it. `carbon_init_remote()` creates a tracker for the provider
-instead: give it the chat, then pass it as `tracker`.
-
-```{r}
-#| eval: !expr run_remote
-chat_remote <- chat_openrouter(
-  model = "openai/gpt-6-luna",
-  system_prompt = system_prompt,
-  echo = "none"
-)
-
-remote <- carbon_init_remote(
-  chat_remote,
-  project_name = "Austen_tutorial",
-  output_dir   = file.path(tempdir(), "tidycarbon_results")
-)
-
-llm_remote <- label_sentences(pride, chat_remote, tracker = remote)
-
-remote_labels <- bind_rows(llm_remote$result)
-
-# Sentences still without a label after 3 tries.
-sum(!pride$id %in% remote_labels$id)
-```
-
-The estimate comes from [EcoLogits](https://ecologits.ai), which is installed
-automatically through reticulate. The session tracker from `carbon_init()` is
-untouched: a remote tracker is only used where you pass it.
-
-`llm_remote` has one row per request. Each impact column comes as a lower
-bound, a mean and an upper bound: the provider does not publish the size of
-its models, so EcoLogits brackets it. A remote tracker also estimates water,
-both what cools the data center and what generating its electricity
-consumes. Check `n_modelled` first: if it is 0, EcoLogits does not know the
-model and the impact columns are `NA`.
-
-```{r}
-#| eval: !expr run_remote
-llm_remote |>
+llm |>
   transmute(
     label,
     wall_time_sec,
@@ -712,78 +582,20 @@ llm_remote |>
   )
 ```
 
-Summed, the total for the sample:
-
-```{r}
-#| eval: !expr run_remote
-remote_total <- llm_remote |>
-  summarise(
-    requests      = n(),
-    wall_time_sec = sum(wall_time_sec),
-    output_tokens = sum(output_tokens),
-    across(
-      matches("^(energy_consumed|emissions_total|water_consumed)_(min|mean|max)$"),
-      sum
-    )
-  )
-
-remote_total |>
-  transmute(
-    requests,
-    wall_time_sec,
-    output_tokens,
-    energy_wh_min = energy_consumed_min * 1000,
-    energy_wh_max = energy_consumed_max * 1000,
-    co2e_mg_min   = emissions_total_min * 1e6,
-    co2e_mg_max   = emissions_total_max * 1e6,
-    water_ml_min  = water_consumed_min * 1000,
-    water_ml_max  = water_consumed_max * 1000
-  )
-```
+Each impact column comes as a lower bound, a mean and an upper bound: the
+provider does not publish the size of its models, so EcoLogits brackets it. A
+remote tracker also estimates water, both what cools the data center and what
+generating its electricity consumes. Check `n_modelled` first: if it is 0,
+EcoLogits does not know the model and the impact columns are `NA`.
 
 Remote measurements are logged to their own file, `emissions_remote.csv`,
 because their columns differ from a local measurement.
 
 #### Dictionary or model?
 
-Every method labelled the same sentences, and every one was tracked. Put
-what each one cost side by side, in total and per sentence:
-
-```{r}
-#| label: costs
-#| eval: !expr run_llm
-costs <- bind_rows(
-  tibble(
-    method    = "Dictionary",
-    where     = "this machine, measured",
-    energy_wh = dict$energy_consumed * 1000,
-    co2e_mg   = dict$emissions_total * 1e6
-  ),
-  if (run_ollama) tibble(
-    method    = "Local model (Ollama)",
-    where     = "this machine, measured",
-    energy_wh = local_total$energy_consumed * 1000,
-    co2e_mg   = local_total$emissions_total * 1e6
-  ),
-  if (run_remote) tibble(
-    method    = "Remote model (API)",
-    where     = "provider, estimated",
-    energy_wh = remote_total$energy_consumed_mean * 1000,
-    co2e_mg   = remote_total$emissions_total_mean * 1e6
-  )
-) |>
-  mutate(
-    energy_wh_per_sentence = energy_wh / nrow(pride),
-    co2e_mg_per_sentence   = co2e_mg / nrow(pride)
-  )
-
-costs
-```
-
 Read the gaps as orders of magnitude, not as precise ratios. The dictionary
 figure is your whole machine, measured over a fraction of a second, which is
-too short to measure well. The local model is measured on the same machine,
-so those two compare directly. The remote figure is an estimate of the
+too short to measure well. The remote figure is an estimate of the
 provider's data center, with a wider scope, and should not be added to the
 local ones. The direction is the useful part: if a dictionary answers the
 question, it does so for a small fraction of the emissions [@balluff:2026:nlb]; if it does not,

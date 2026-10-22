@@ -8,8 +8,8 @@ The tutorial is [getting-started.qmd](getting-started.qmd). It shows how to
 
 1. measure the energy and emissions of an existing R script,
 2. measure each step of a tidy pipeline separately,
-3. compare the energy cost of sentiment analysis with a dictionary, a local
-   language model, and a hosted language model.
+3. compare the energy cost of sentiment analysis with a dictionary and with a
+   hosted language model.
 
 ## Running the tutorial
 
@@ -35,11 +35,8 @@ quarto render getting-started.qmd
 The first run of tidycarbon sets up its Python environment through
 reticulate, which takes a few minutes.
 
-The language model section is optional. It runs when
-[Ollama](https://ollama.com) is running locally with `gemma4:e4b` pulled, or,
-for the remote pathway, when `use_remote <- TRUE` is set in the first chunk
-and an `OPENROUTER_API_KEY` is set in a `.env` file. Otherwise that section
-is shown without output and the rest of the tutorial runs as normal.
+The language model code is shown but not run, because it needs an
+OpenRouter API key. The rest of the tutorial runs without one.
 
 ## Citation
 
