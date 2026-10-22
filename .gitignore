@@ -1,0 +1,9 @@
+.env
+.Rhistory
+.RData
+.Rproj.user
+.quarto/
+*_files/
+*.html
+*.ipynb
+tidycarbon_results/

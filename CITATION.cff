@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+title: "Getting Started with tidycarbon: Measuring the energy and emissions of R programs"
+message: >-
+  If you use this tutorial, please cite it as below.
+type: software
+authors:
+  - given-names: Sean
+    family-names: Hamilton-Palicki
+    email: sean.palicki@pm.me
+  - given-names: Isaac
+    family-names: Bravo
+    email: isaac.bravo@tum.de
+repository-code: "https://github.com/seankellyhp/tidycarbon-tutorial"
+license: MIT
+keywords:
+  - R
+  - energy
+  - carbon emissions
+  - sustainability
+  - text analysis
+  - large language models
+references:
+  - type: software
+    title: "tidycarbon: Tidy R Wrapper for Python's CodeCarbon Emissions Tracker"
+    authors:
+      - given-names: Sean
+        family-names: Hamilton-Palicki
+      - given-names: Isaac
+        family-names: Bravo
+    repository-code: "https://github.com/seankellyhp/Tidycarbon"
+    license: MIT
