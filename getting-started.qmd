@@ -26,7 +26,7 @@ Sys.setenv(CODECARBON_LOG_LEVEL = "error")
 
 ## Description
 
-TidyCarbon is an open source R package for measuring and comparing the
+TidyCarbon [@hamiltonpalicki:2026:tidycarbon] is an open source R package for measuring and comparing the
 resource use of R programs. This is relevant because of the increased reliance of social science research on computationally complex machine learning and AI methods such as large language models [@balluff:2026:nlb], which may consume significantly more non-renewable resources than computationally less advanced methods [@hamiltonpalicki:2026:dlu; @luccioni:2024:phc].
 
 TidyCarbon provides a tidy interface over the Python
@@ -69,30 +69,6 @@ level of pipelines and individual R functions.
 | `carbon_bench()` | Directly compare the emissions of functions. |
 | `carbon_collect()` | View the results of the `carbon_step()` calls in a pipeline. |
 
-## Output Data
-
-Every measurement is returned as a tibble with one row per tracked task and
-columns for the measurements and machine information. The most important
-columns, with values from the first example below:
-
-| Column | Unit | Example | Description |
-|---|---|---|---|
-| `label` | | `clean and count words` | Label given to the tracked task. |
-| `wall_time_sec` | seconds | 0.90 | Elapsed time of the task. |
-| `cpu_energy` | kWh | 0.0000094 | Energy used by the CPU. |
-| `gpu_energy` | kWh | 0.0000046 | Energy used by the GPU. |
-| `ram_energy` | kWh | 0.0000035 | Energy used by the RAM. |
-| `energy_consumed` | kWh | 0.0000175 | Total energy: CPU, GPU and RAM. |
-| `emissions_total` | kgCO2eq | 0.0000067 | Estimated emissions: energy times the carbon intensity of the grid. |
-| `country_iso_code` | | `DEU` | Country used for the carbon intensity. |
-| `cpu_model` | | `13th Gen Intel(R) Core(TM) i7-13700K` | CPU of the machine. |
-| `gpu_model` | | `1 x NVIDIA GeForce RTX 3090 Ti` | GPU of the machine. |
-
-As a side effect, results are automatically appended to a CSV file in a local
-project folder. The examples under [How to Use](#how-to-use) show both.
-
-
-
 # Requirements and Installation
 
 TidyCarbon requires reticulate, which creates a Python environment that loads
@@ -100,7 +76,7 @@ the CodeCarbon and EcoLogits dependencies.
 
 ```{r}
 #| eval: false
-remotes::install_github("seankellyhp/tidycarbon")
+remotes::install_github("seankellyhp/Tidycarbon")
 library("tidycarbon")
 ```
 
@@ -232,16 +208,18 @@ books |>
 books_emit <- tracker_stop(label = "clean and count words") # End tracker
 ```
 
+#### Output data
+
+Every measurement is returned as a tibble with one row per tracked task and
+columns for the measurements and machine information. As a side effect,
+results are automatically appended to the CSV file in the project folder.
+
 The object `books_emit` is now a one-row tibble of the carbon measurement. It
 has all of the columns returned by CodeCarbon, most of which are not needed
-for downstream analysis. It can be cleaned up like any other tibble.
+for downstream analysis. `glimpse()` shows all of them:
 
 ```{r}
-emissions <- books_emit |>
-  select(label, wall_time_sec, cpu_energy, gpu_energy, ram_energy,
-         energy_consumed, emissions_total)
-
-emissions
+glimpse(books_emit)
 ```
 
 The results include estimates of time, hardware-level energy consumption,
@@ -251,15 +229,33 @@ a task this small, the time and energy needs are very small, so watt-hours and
 milligrams are easier to read:
 
 ```{r}
-emissions |>
+emissions <- books_emit |>
   transmute(
+    task_id,
+    label,
+    wall_time_sec,
     cpu_wh   = cpu_energy * 1000,
     gpu_wh   = gpu_energy * 1000,
     ram_wh   = ram_energy * 1000,
     total_wh = energy_consumed * 1000,
-    co2e_mg  = emissions_total * 1e6
+    co2e_mg  = emissions_total * 1e6,
+    water_consumed
   )
 ```
+
+The selected columns:
+
+| Column | Unit | Description |
+|---|---|---|
+| `task_id` | | Unique ID of the tracked task. |
+| `label` | | Label given to the tracked task. |
+| `wall_time_sec` | seconds | Elapsed time of the task. |
+| `cpu_wh` | Wh | Energy used by the CPU. |
+| `gpu_wh` | Wh | Energy used by the GPU. |
+| `ram_wh` | Wh | Energy used by the RAM. |
+| `total_wh` | Wh | Total energy: CPU, GPU and RAM. |
+| `co2e_mg` | mgCO2eq | Estimated emissions: energy times the carbon intensity of the grid. |
+| `water_consumed` | litres | Estimated water use. It is 0 for a local machine, which has no water use set. |
 
 This level of analysis is useful for reporting and requires the least effort.
 Reporting is a very important part of understanding the environmental impacts
@@ -340,20 +336,17 @@ the optimal number of topics (k), these numbers increase. Yet they are hardly
 noticeable compared to ever more complex fine-tuning of transformer models or
 inference with large language models.
 
-### Sentiment analysis at increasing levels of complexity
+### Comparisons of Simple Sentiment Analysis Approaches
 
-Next we will use two approaches for sentiment analysis, with a focus on
+Next we will use three approaches for sentiment analysis, with a focus on
 comparing their emissions. We will start with the least complex approach,
-dictionaries, and then estimate inference for a large language model called
-via an API.
+tidytext with dictionaries, then move to quanteda sentiments and latent semantic scaling.
 
-#### The sentences
+#### Data Preparation
 
 Sentiment is scored sentence by sentence, for every sentence of
-*Pride and Prejudice*. The data has one row per printed line, and a line is rarely a sentence.
-`unnest_sentences()` splits text into sentences, so first join each chapter's
-lines back into one string. The titles in front of names are written without
-their full stop, or every "Mrs." would end a sentence:
+*Pride and Prejudice*. The data has one row per printed line.
+`unnest_sentences()` splits text into sentences. 
 
 ```{r}
 chapters <- books |>
@@ -374,13 +367,13 @@ pride <- chapters |>
 pride
 ```
 
-#### Dictionary sentiment
+#### Dictionary Sentiment using TidyText
 
-The least complex approach is a dictionary: split each sentence into words,
-join the bing lexicon, and count positive against negative words. A sentence
-with no lexicon word, or as many positive as negative ones, is neutral.
+The first approach is to sentences into words, join the bing lexicon, 
+and count positive against negative words, with a neutral category based on 
+our thresholds. 
 
-`carbon_track()` calls a function with its arguments and returns one row: the
+`carbon_track()` calls a function with its arguments and returns the
 measurement, with the function's value in the `result` column. Here it scores
 every sentence in the novel:
 
@@ -413,7 +406,7 @@ dict |>
             co2e_mg = emissions_total * 1e6)
 ```
 
-Labelling all `r format(nrow(pride), big.mark = ",")` sentences takes a
+Labeling all `r format(nrow(pride), big.mark = ",")` sentences takes a
 fraction of a second. The labels are in `result`:
 
 ```{r}
@@ -426,20 +419,14 @@ dictionary_labels |>
 #### Benchmark: tidytext or quanteda?
 
 The same dictionary approach can be written with
-[quanteda.sentiment](https://github.com/quanteda/quanteda.sentiment), which
-includes the same lexicon as bing (`data_dictionary_HuLiu`). It is installed
+[quanteda.sentiment](https://github.com/quanteda/quanteda.sentiment)
+[@benoit:2025:quantedasentiment], an extension of quanteda
+[@benoit:2018:quanteda], which
+includes the same sentiment lexicon (`data_dictionary_HuLiu`). It is installed
 from GitHub:
 
-```{r}
-#| eval: false
-remotes::install_github("quanteda/quanteda.sentiment")
-```
+To compare the two packages fairly, both start from the same texts from *Pride and Prejudice*, one row per chapter. Both then split the chapters into sentences, tokenize them and scores every sentence. 
 
-To compare the two packages fairly, both start from the same texts, the
-`chapters` of *Pride and Prejudice*, one row per chapter. Each one then
-splits the chapters into sentences, tokenizes them and scores every sentence,
-and the sign of the score gives the label. Every step is part of what is
-measured:
 
 ```{r}
 sentiment_tidytext <- function(texts) {
@@ -470,7 +457,7 @@ sentiment_quanteda <- function(texts) {
 
 The two packages split sentences slightly differently, so to compare their
 labels, score the same sentences, `pride`, with both. The confusion matrix
-shows where they agree:
+shows that they largely agree:
 
 ```{r}
 quanteda_labels <- pride |>
@@ -483,8 +470,8 @@ table(
 )
 ```
 
-`carbon_bench()` runs each approach repeatedly, in random order, and measures
-every run:
+`carbon_bench()` is used to compare the efficiency of two functions directly. It 
+runs each approach repeatedly, in random order, and plots the results:
 
 ```{r}
 bench <- carbon_bench(
@@ -512,10 +499,10 @@ autoplot(bench, metric = "energy_consumed")
 #### Latent semantic scaling
 
 [LSX](https://koheiw.github.io/LSX/) implements latent semantic scaling
-(LSS), a semi-supervised approach. Instead of a fixed dictionary, it starts
+(LSS) [@watanabe:2020:lss], a semi-supervised approach. Instead of a fixed dictionary, it starts
 from a small set of seed words and learns the polarity of every other word
-from the texts themselves, by fitting a model of how words co-occur. Compare
-it with the quanteda dictionary approach, starting from the same `chapters`:
+from the texts themselves, by fitting a model of how words co-occur. We compare
+it with the quanteda dictionary approach, starting from the same texts:
 
 ```{r}
 sentiment_lss <- function(texts) {
@@ -545,9 +532,10 @@ bind_rows(
   pivot_wider(names_from = sentiment, values_from = n)
 ```
 
-LSS scores are relative: 0 is the average sentence of the novel, so about
-half of the sentences fall on each side. A sentence with no word the model
-knows has no score and is neutral.
+This isn't a perfect comparison because LSS measures polarity (positive - negative).
+However it is another approach to sentiment analysis that adds a level of context missing 
+in dictionary approaches. More complex approaches require model training, using 
+the results from pre-trained models, or calls to external APIs. 
 
 ```{r}
 bench_lss <- carbon_bench(
@@ -572,7 +560,34 @@ bench_lss |>
 autoplot(bench_lss, metric = "energy_consumed")
 ```
 
-#### Language model sentiment
+
+
+#### Tracking the Emissions of More Computationally Complex Methods
+
+This tutorial is self-contained, in that it has avoided loading any large models, 
+model weights, or calls to external APIs. However, the results demonstrated aren't 
+representative of the current state-of-the-art in sentiment analysis. As the 
+trend of the LSS vs. Dictionary showed, as model complexity increases, so too does 
+the compute time, memory, and energy needs. 
+
+In the code below I have included an example of estimating the emissions of external 
+API calls to Large Language Models for sentiment analysis. When I ran this on the 
+sample, the it cost XXX and the estimated energy use was XXX to XXX. That is X times 
+more that the LSS approach and X times more than the Dictionary approach. Of course, 
+LLMs have much more context, so their results are often an improvement over either 
+of these simpler approaches. We explored the tradeoff between Performance and Energy 
+Use across several classification tasks including sentiment analysis, multi-class
+classification, and named entitity recognition [@hamiltonpalicki:2026:dlu]. We 
+found that even small reasoning LLMs used up to 150,000 times more energy than 
+Dictionaries for sentiment analysis, while also doubling the performance. 
+
+We encourage researchers to provides these kinds of benchmarks across a wider variety of 
+tasks relevant to social scientists. The numbers provided in this tutorial are 
+purposefully small so as to provide an introduction to tracking emissions using the 
+TidyCarbon package, while also not contributing unnecessarily to global greenhouse 
+emissions itself. 
+
+#### Sentiment Analysis with Large Language Models
 
 The language model runs in a provider's data center, reached through
 [OpenRouter](https://openrouter.ai) with
@@ -593,6 +608,15 @@ automatically through reticulate.
 The code below is not run when the tutorial is rendered, because it needs an
 API key and every request costs money. Check the price of the model on
 OpenRouter before you run it.
+
+Each impact column comes as a lower bound, a mean and an upper bound: the
+provider does not publish the size of its models, so EcoLogits brackets it. A
+remote tracker also estimates water, both what cools the data center and what
+generating its electricity consumes. Check `n_modelled` first: if it is 0,
+EcoLogits does not know the model and the impact columns are `NA`.
+
+Remote measurements are logged to their own file, `emissions_remote.csv`,
+because their columns differ from a local measurement.
 
 ```{r}
 #| eval: false
@@ -646,28 +670,9 @@ llm |>
   )
 ```
 
-Each impact column comes as a lower bound, a mean and an upper bound: the
-provider does not publish the size of its models, so EcoLogits brackets it. A
-remote tracker also estimates water, both what cools the data center and what
-generating its electricity consumes. Check `n_modelled` first: if it is 0,
-EcoLogits does not know the model and the impact columns are `NA`.
-
-Remote measurements are logged to their own file, `emissions_remote.csv`,
-because their columns differ from a local measurement.
-
-#### Dictionary or model?
-
-Read the gaps as orders of magnitude, not as precise ratios. The dictionary
-figure is your whole machine, measured over a fraction of a second, which is
-too short to measure well. The remote figure is an estimate of the
-provider's data center, with a wider scope, and should not be added to the
-local ones. The direction is the useful part: if a dictionary answers the
-question, it does so for a small fraction of the emissions [@balluff:2026:nlb]; if it does not,
-the number of sentences sent to a model is what sets the bill.
-
 ## Technical Details
 
-Visit the [GitHub repository](https://github.com/seankellyhp/tidycarbon) for
+Visit the [GitHub repository](https://github.com/seankellyhp/Tidycarbon) for
 the technical implementation.
 
 ## References
