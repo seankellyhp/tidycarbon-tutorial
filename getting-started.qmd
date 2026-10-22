@@ -191,6 +191,7 @@ library(purrr)
 library(topicmodels)
 library(quanteda)
 library(quanteda.sentiment)
+library(LSX)
 ```
 
 ```{r}
@@ -506,6 +507,69 @@ bench |>
 #| fig-width: 7
 #| fig-height: 3.5
 autoplot(bench, metric = "energy_consumed")
+```
+
+#### Latent semantic scaling
+
+[LSX](https://koheiw.github.io/LSX/) implements latent semantic scaling
+(LSS), a semi-supervised approach. Instead of a fixed dictionary, it starts
+from a small set of seed words and learns the polarity of every other word
+from the texts themselves, by fitting a model of how words co-occur. Compare
+it with the quanteda dictionary approach, starting from the same `chapters`:
+
+```{r}
+sentiment_lss <- function(texts) {
+  dfmt <- texts |>
+    corpus(text_field = "text") |>
+    corpus_reshape(to = "sentences") |>
+    tokens(remove_punct = TRUE, remove_symbols = TRUE, remove_numbers = TRUE) |>
+    dfm() |>
+    dfm_remove(stopwords("en"))
+
+  lss <- textmodel_lss(dfmt, seeds = as.seedwords(data_dictionary_sentiment), k = 300)
+
+  tibble(id = seq_len(ndoc(dfmt)), score = predict(lss, newdata = dfmt)) |>
+    mutate(sentiment = case_when(
+      score > 0 ~ "positive",
+      score < 0 ~ "negative",
+      .default = "neutral"
+    ))
+}
+
+bind_rows(
+  quanteda = sentiment_quanteda(chapters),
+  lss      = sentiment_lss(chapters),
+  .id = "package"
+) |>
+  count(package, sentiment) |>
+  pivot_wider(names_from = sentiment, values_from = n)
+```
+
+LSS scores are relative: 0 is the average sentence of the novel, so about
+half of the sentences fall on each side. A sentence with no word the model
+knows has no score and is neutral.
+
+```{r}
+bench_lss <- carbon_bench(
+  quanteda = sentiment_quanteda(chapters),
+  lss      = sentiment_lss(chapters),
+  times = 20
+)
+
+bench_lss |>
+  group_by(expr) |>
+  summarise(
+    duration_sec = median(duration),
+    energy_wh    = median(energy_consumed) * 1000,
+    co2e_mg      = median(emissions_total) * 1e6
+  )
+```
+
+```{r}
+#| label: lss-bench-plot
+#| fig-width: 7
+#| fig-height: 3.5
+autoplot(bench_lss, metric = "energy_consumed")
 ```
 
 #### Language model sentiment
